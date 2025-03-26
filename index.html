@@ -123,8 +123,9 @@
         const SPRINT_SPEED = 10;       // Reduced from 15 to 10
         const BASE_ENEMY_SPEED = 3;
         const PROJECTILE_SPEED = 12;   // Increased from 7 to 12
-        const ENEMY_TURN_SPEED = 0.03;
+        const BASE_TURN_SPEED = 0.03;
         const SPEED_INCREASE_INTERVAL = 25;
+        const TURN_SPEED_MULTIPLIER = 0.8;  // Turn speed increases at 80% the rate of movement speed
 
         // Update or add these constants at the top
         const FPS = 60;
@@ -144,6 +145,14 @@
         const SHOOT_COOLDOWN = 2000;  // 2 seconds in milliseconds
         let canShoot = false;
         let gameStartTime;
+
+        // Add these constants at the top
+        const SHOT_INTERVAL = 83;  // ~83.33ms between shots (1000ms / 12 = ~83.33ms for 12 shots per second)
+        let lastShotTime = 0;
+        let isMouseDown = false;
+
+        // Add this variable at the top
+        let gameOverReason = ''; // 'collision' or 'ammo'
 
         // Player
         const player = {
@@ -168,7 +177,7 @@
                 // Handle space key for restart
                 if (e.code === 'Space' && gameOver) {
                     resetGame();
-                    e.preventDefault(); // Prevent page scrolling
+                    e.preventDefault();
                 }
             } else {
                 keys['Shift'] = true;
@@ -181,15 +190,7 @@
                 keys['Shift'] = false;
             }
         });
-        document.addEventListener('click', (e) => {
-            if (!gameStarting && !gameOver) {
-                const clickEvent = {
-                    clientX: e.clientX,
-                    clientY: e.clientY
-                };
-                shoot(clickEvent);
-            }
-        });
+        canvas.removeEventListener('click', shoot);  // Remove if it exists
 
         // Add mousePosition to track current mouse coordinates
         const mousePosition = {
@@ -197,7 +198,29 @@
             y: 0
         };
 
-        // Add mouse move event listener after other event listeners
+        // Update mouse event listeners
+        canvas.addEventListener('mousedown', (e) => {
+            if (!isMouseDown) {
+                isMouseDown = true;
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                
+                mousePosition.x = (e.clientX - rect.left) * scaleX;
+                mousePosition.y = (e.clientY - rect.top) * scaleY;
+                
+                shoot({
+                    clientX: mousePosition.x,
+                    clientY: mousePosition.y
+                });
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            isMouseDown = false;
+        });
+
+        // Update mousemove handler to store actual mouse coordinates
         document.addEventListener('mousemove', (e) => {
             const rect = canvas.getBoundingClientRect();
             const scaleX = canvas.width / rect.width;
@@ -245,24 +268,24 @@
         };
 
         function shoot(e) {
-            if (!canShoot) return;
-            if (player.shots <= 0) return;
+            if (!canShoot || player.shots <= 0) return;
             
-            const rect = canvas.getBoundingClientRect();
-            const scaleX = canvas.width / rect.width;
-            const scaleY = canvas.height / rect.height;
+            const currentTime = Date.now();
+            if (currentTime - lastShotTime < SHOT_INTERVAL) return;
             
-            const targetX = (e.clientX - rect.left) * scaleX;
-            const targetY = (e.clientY - rect.top) * scaleY;
+            // Use target position directly since mousePosition is already scaled
+            const targetX = e.clientX;
+            const targetY = e.clientY;
             
             const angle = Math.atan2(targetY - player.y, targetX - player.x);
             const projectileSize = Math.max(16, (player.size / 50) * 16);
             
+            // Spawn projectile at edge of player
             const spawnX = player.x + Math.cos(angle) * (player.size/2);
             const spawnY = player.y + Math.sin(angle) * (player.size/2);
             
             player.shots -= 1;
-            player.size = Math.max(MINIMUM_SIZE, player.size - SIZE_DECREASE);  // Lose 3 size per shot
+            player.size = Math.max(MINIMUM_SIZE, player.size - SIZE_DECREASE);
             
             player.projectiles.push({
                 x: spawnX,
@@ -271,11 +294,19 @@
                 dx: Math.cos(angle) * PROJECTILE_SPEED,
                 dy: Math.sin(angle) * PROJECTILE_SPEED
             });
+
+            lastShotTime = currentTime;
         }
 
-        function calculateEnemySpeed() {
+        function calculateEnemySpeeds() {
             const speedIncrease = Math.floor(score / SPEED_INCREASE_INTERVAL);
-            return BASE_ENEMY_SPEED + speedIncrease;
+            const moveSpeed = BASE_ENEMY_SPEED + speedIncrease;
+            
+            // Calculate turn speed increase ratio
+            const turnSpeedRatio = 1 + (speedIncrease / BASE_ENEMY_SPEED * TURN_SPEED_MULTIPLIER);
+            const turnSpeed = BASE_TURN_SPEED * turnSpeedRatio;
+            
+            return { moveSpeed, turnSpeed };
         }
 
         function spawnEnemy() {
@@ -289,13 +320,15 @@
                 case 3: x = Math.random() * BASE_GAME_WIDTH; y = BASE_GAME_HEIGHT; break;
             }
 
+            const speeds = calculateEnemySpeeds();
+
             enemies.push({
                 x: x,
                 y: y,
-                size: 40,  // Back to original size
-                speed: calculateEnemySpeed(),
+                size: 40,
+                speed: speeds.moveSpeed,
                 angle: Math.atan2(player.y - y, player.x - x),
-                turnSpeed: ENEMY_TURN_SPEED,
+                turnSpeed: speeds.turnSpeed,
                 currentFrame: 0,
                 frameCount: 0
             });
@@ -322,6 +355,9 @@
             currentFrameCount = 0;
             currentAnimationFrame = 0;
             requestAnimationFrame(update);
+            isMouseDown = false;
+            lastShotTime = 0;
+            gameOverReason = '';
         }
 
         function checkCollision(obj1, obj2) {
@@ -354,19 +390,9 @@
         }
 
         function update(currentTime) {
-            // Calculate time since last frame
-            const deltaTime = currentTime - lastFrameTime;
-            
-            // If not enough time has passed, skip this frame
-            if (deltaTime < FRAME_TIME) {
-                requestAnimationFrame(update);
-                return;
-            }
-            
-            // Update last frame time
-            lastFrameTime = currentTime - (deltaTime % FRAME_TIME);
-
+            // Check for game over conditions first
             if (gameOver) {
+                // Draw game over screen
                 ctx.fillStyle = 'white';
                 ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
                 ctx.shadowBlur = 4;
@@ -391,16 +417,33 @@
                 return;
             }
 
+            // Check for out of ammo condition
+            if (player.shots <= 0 && drops.length === 0 && player.projectiles.length === 0) {
+                gameOver = true;
+                gameOverReason = 'ammo';
+                if (score > sessionHighScore) {
+                    sessionHighScore = score;
+                }
+                return;
+            }
+
             if (gameStarting) {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);  // Clear previous numbers
                 requestAnimationFrame(update);
                 return;
             }
 
-            if (player.shots <= 0 && drops.length === 0 && player.projectiles.length === 0) {
-                gameOver = true;
+            // Calculate time since last frame
+            const deltaTime = currentTime - lastFrameTime;
+            
+            // If not enough time has passed, skip this frame
+            if (deltaTime < FRAME_TIME) {
+                requestAnimationFrame(update);
                 return;
             }
+            
+            // Update last frame time
+            lastFrameTime = currentTime - (deltaTime % FRAME_TIME);
 
             // Simplified sprint handling
             let currentSpeed = PLAYER_SPEED;
@@ -446,6 +489,7 @@
 
                 if (checkCollision(player, enemy)) {
                     gameOver = true;
+                    gameOverReason = 'collision';
                 }
 
                 player.projectiles.forEach((proj, j) => {
@@ -494,6 +538,17 @@
                 ctx.textAlign = 'left';
             }
 
+            // Handle continuous shooting
+            if (isMouseDown && canShoot) {
+                const currentTime = Date.now();
+                if (currentTime - lastShotTime >= SHOT_INTERVAL) {
+                    shoot({
+                        clientX: mousePosition.x,  // Use mousePosition directly
+                        clientY: mousePosition.y
+                    });
+                }
+            }
+
             draw();
             requestAnimationFrame(update);
         }
@@ -535,8 +590,8 @@
                     mapSprite,
                     0,
                     0,
-                    645,  // Original map width
-                    478,  // Original map height
+                    645,
+                    478,
                     0,
                     0,
                     BASE_GAME_WIDTH,
@@ -599,15 +654,15 @@
                 );
             });
 
-            // Draw aim indicator
+            // Calculate projectile size for indicator (same calculation used in shoot function)
+            const projectileSize = Math.max(16, (player.size / 50) * 16);
+            
+            // Calculate spawn position for indicator
             const angle = Math.atan2(mousePosition.y - player.y, mousePosition.x - player.x);
-            const projectileSize = Math.max(8, (player.size / 40) * 8);
             const spawnX = player.x + Math.cos(angle) * (player.size/2);
             const spawnY = player.y + Math.sin(angle) * (player.size/2);
             
-            // Draw aim indicator (fireball)
-            ctx.save();
-            ctx.globalAlpha = 0.5;
+            // Draw aim indicator (fireball) - removed opacity
             ctx.drawImage(
                 fireballSprite,
                 0,
@@ -619,8 +674,6 @@
                 projectileSize,
                 projectileSize
             );
-            ctx.globalAlpha = 1.0;
-            ctx.restore();
 
             // Draw enemies with sprites
             enemies.forEach(enemy => {
@@ -705,6 +758,47 @@
 
             // Reset text align
             ctx.textAlign = 'left';
+
+            // Draw game over screen based on reason
+            if (gameOver) {
+                // Add dark overlay
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                ctx.fillRect(0, 0, BASE_GAME_WIDTH, BASE_GAME_HEIGHT);
+
+                // Set up text style
+                ctx.fillStyle = 'white';
+                ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+                ctx.shadowBlur = 4;
+                ctx.shadowOffsetX = 2;
+                ctx.shadowOffsetY = 2;
+                ctx.textAlign = 'center';
+
+                if (gameOverReason === 'ammo') {
+                    // Out of ammo text
+                    ctx.font = 'bold 64px Arial';
+                    ctx.fillText('Out of Ammo!', BASE_GAME_WIDTH/2, BASE_GAME_HEIGHT/2 - 100);
+                    ctx.fillText('Score: ' + score, BASE_GAME_WIDTH/2, BASE_GAME_HEIGHT/2 - 20);
+                    
+                    ctx.font = 'bold 32px Arial';
+                    ctx.fillText('High Score: ' + sessionHighScore, BASE_GAME_WIDTH/2, BASE_GAME_HEIGHT/2 + 40);
+                    ctx.fillText('Press SPACE to restart', BASE_GAME_WIDTH/2, BASE_GAME_HEIGHT/2 + 100);
+                } else {
+                    // Collision text
+                    ctx.font = 'bold 64px Arial';
+                    ctx.fillText('Game Over!', BASE_GAME_WIDTH/2, BASE_GAME_HEIGHT/2 - 100);
+                    ctx.fillText('Score: ' + score, BASE_GAME_WIDTH/2, BASE_GAME_HEIGHT/2 - 20);
+                    
+                    ctx.font = 'bold 32px Arial';
+                    ctx.fillText('High Score: ' + sessionHighScore, BASE_GAME_WIDTH/2, BASE_GAME_HEIGHT/2 + 40);
+                    ctx.fillText('Press SPACE to restart', BASE_GAME_WIDTH/2, BASE_GAME_HEIGHT/2 + 100);
+                }
+
+                // Reset shadow
+                ctx.shadowColor = 'transparent';
+                ctx.shadowBlur = 0;
+                ctx.shadowOffsetX = 0;
+                ctx.shadowOffsetY = 0;
+            }
         }
 
         // Update the resize function
