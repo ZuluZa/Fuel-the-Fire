@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fuel the Fire</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #1a1a1a;
+        }
+
+        .game-container {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        canvas {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+
+        #usernameModal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            text-align: center;
+            max-width: 400px;
+            width: 90%;
+        }
+
+        .instructions {
+            text-align: left;
+            margin: 20px 0;
+            color: #333;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .key {
+            background-color: #444;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin: 0 2px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div id="usernameModal">
+        <div class="modal-content">
+            <h2 style="color: black; margin-bottom: 20px;">Enter Your Username</h2>
+            <input type="text" id="usernameInput" style="padding: 10px; font-size: 16px; margin-bottom: 10px; width: 200px;" maxlength="15">
+            
+            <div class="instructions">
+                <h3 style="margin: 10px 0;">How to Play:</h3>
+                <p><span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span> - Move your character</p>
+                <p><span class="key">SHIFT</span> - Sprint (2x Speed)</p>
+                <p><span class="key">Click</span> - Shoot fireballs</p>
+                <p>• Collect wood to grow larger and gain shots<br>
+                   • Each shot reduces your size<br>
+                   • Avoid enemy creatures<br>
+                   • Enemies get faster every 25 points<br>
+                   • Game over if you're too small with no pickups</p>
+            </div>
+
+            <button onclick="startGame()" style="padding: 10px 20px; font-size: 16px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; margin-top: 10px;">Start Game</button>
+        </div>
+    </div>
+
+    <div class="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+        // Update the constants to use higher resolution
+        const BASE_GAME_WIDTH = 1920;  // Common HD width
+        const BASE_GAME_HEIGHT = 1425;  // Maintains map aspect ratio (645:478)
+
+        // Make sure these are defined before any function that uses them
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Set initial canvas size
+        canvas.width = BASE_GAME_WIDTH;
+        canvas.height = BASE_GAME_HEIGHT;
+
+        // Game state
+        let gameOver = false;
+        let score = 0;
+        let gameStarting = true;
+        let highScore = parseInt(localStorage.getItem('highScore')) || 0;
+        let username = '';
+        let leaderboard = JSON.parse(localStorage.getItem('leaderboard')) || [];
+        let sessionHighScore = 0;
+
+        // Add these as constants at the top of your script
+        const PLAYER_SPEED = 5;        // Normal speed
+        const SPRINT_SPEED = 10;       // Reduced from 15 to 10
+        const BASE_ENEMY_SPEED = 3;
+        const PROJECTILE_SPEED = 12;   // Increased from 7 to 12
+        const ENEMY_TURN_SPEED = 0.03;
+        const SPEED_INCREASE_INTERVAL = 25;
+
+        // Update or add these constants at the top
+        const FPS = 60;
+        const FRAME_TIME = 1000 / FPS;
+
+        // Modify the update function to include frame limiting
+        let lastFrameTime = 0;
+
+        // Update these constants at the top
+        const STARTING_SIZE = 50;      // Starting visual size
+        const STARTING_SHOTS = 3;      // Starting number of shots
+        const SIZE_INCREASE = 9;       // Increased from 5 to 9 (3 shots worth of size)
+        const SIZE_DECREASE = 3;       // Increased from 2 to 3
+        const MINIMUM_SIZE = 30;       // Minimum size player can shrink to
+
+        // Add shooting cooldown constants
+        const SHOOT_COOLDOWN = 2000;  // 2 seconds in milliseconds
+        let canShoot = false;
+        let gameStartTime;
+
+        // Player
+        const player = {
+            x: BASE_GAME_WIDTH / 2,
+            y: BASE_GAME_HEIGHT / 2,
+            size: STARTING_SIZE,
+            speed: PLAYER_SPEED,
+            projectiles: [],
+            shots: STARTING_SHOTS
+        };
+
+        // Enemies and drops
+        let enemies = [];
+        let drops = [];
+        
+        // Input handling
+        const keys = {};
+        document.addEventListener('keydown', e => {
+            if (e.key !== 'Shift') {
+                keys[e.key.toLowerCase()] = true;
+                
+                // Handle space key for restart
+                if (e.code === 'Space' && gameOver) {
+                    resetGame();
+                    e.preventDefault(); // Prevent page scrolling
+                }
+            } else {
+                keys['Shift'] = true;
+            }
+        });
+        document.addEventListener('keyup', e => {
+            if (e.key !== 'Shift') {
+                keys[e.key.toLowerCase()] = false;  // Convert to lowercase
+            } else {
+                keys['Shift'] = false;
+            }
+        });
+        document.addEventListener('click', (e) => {
+            if (!gameStarting && !gameOver) {
+                const clickEvent = {
+                    clientX: e.clientX,
+                    clientY: e.clientY
+                };
+                shoot(clickEvent);
+            }
+        });
+
+        // Add mousePosition to track current mouse coordinates
+        const mousePosition = {
+            x: 0,
+            y: 0
+        };
+
+        // Add mouse move event listener after other event listeners
+        document.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            
+            mousePosition.x = (e.clientX - rect.left) * scaleX;
+            mousePosition.y = (e.clientY - rect.top) * scaleY;
+        });
+
+        // Add these variables at the top with other game state variables
+        const playerSprite = new Image();
+        playerSprite.src = 'playersprite.png';
+        const SPRITE_SHEET_SIZE = 192;
+        const GRID_SIZE = 4; // 4x4 grid
+        const CELL_SIZE = SPRITE_SHEET_SIZE / GRID_SIZE; // 48x48 cells
+        const SPRITE_FRAME_WIDTH = 32; // Actual sprite size
+        const SPRITE_FRAME_HEIGHT = 32; // Actual sprite size
+        const SPRITE_OFFSET = (CELL_SIZE - SPRITE_FRAME_WIDTH) / 2; // Centering offset (8 pixels)
+        const FRAMES_PER_DIRECTION = 4;
+        const FRAME_DURATION = 15; // Changed from 30 to 15 frames per sprite frame
+        let currentFrameCount = 0;
+        let currentAnimationFrame = 0;
+
+        // Add this with other sprite loading at the top
+        const enemySprite = new Image();
+        enemySprite.src = 'enemysprite.png';
+
+        // Add this with other sprite loading at the top
+        const fireballSprite = new Image();
+        fireballSprite.src = 'fireball.png';
+
+        // Add this with other sprite loading at the top
+        const woodSprite = new Image();
+        woodSprite.src = 'wood.png';
+
+        // Update map sprite loading
+        const mapSprite = new Image();
+        mapSprite.src = 'map.jpg';
+        mapSprite.onload = () => {
+            console.log('Map loaded successfully');
+            console.log('Map dimensions:', mapSprite.width, 'x', mapSprite.height);
+        };
+        mapSprite.onerror = () => {
+            console.error('Failed to load map sprite');
+        };
+
+        function shoot(e) {
+            if (!canShoot) return;
+            if (player.shots <= 0) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            
+            const targetX = (e.clientX - rect.left) * scaleX;
+            const targetY = (e.clientY - rect.top) * scaleY;
+            
+            const angle = Math.atan2(targetY - player.y, targetX - player.x);
+            const projectileSize = Math.max(16, (player.size / 50) * 16);
+            
+            const spawnX = player.x + Math.cos(angle) * (player.size/2);
+            const spawnY = player.y + Math.sin(angle) * (player.size/2);
+            
+            player.shots -= 1;
+            player.size = Math.max(MINIMUM_SIZE, player.size - SIZE_DECREASE);  // Lose 3 size per shot
+            
+            player.projectiles.push({
+                x: spawnX,
+                y: spawnY,
+                size: projectileSize,
+                dx: Math.cos(angle) * PROJECTILE_SPEED,
+                dy: Math.sin(angle) * PROJECTILE_SPEED
+            });
+        }
+
+        function calculateEnemySpeed() {
+            const speedIncrease = Math.floor(score / SPEED_INCREASE_INTERVAL);
+            return BASE_ENEMY_SPEED + speedIncrease;
+        }
+
+        function spawnEnemy() {
+            const side = Math.floor(Math.random() * 4);
+            let x, y;
+            
+            switch(side) {
+                case 0: x = 0; y = Math.random() * BASE_GAME_HEIGHT; break;
+                case 1: x = BASE_GAME_WIDTH; y = Math.random() * BASE_GAME_HEIGHT; break;
+                case 2: x = Math.random() * BASE_GAME_WIDTH; y = 0; break;
+                case 3: x = Math.random() * BASE_GAME_WIDTH; y = BASE_GAME_HEIGHT; break;
+            }
+
+            enemies.push({
+                x: x,
+                y: y,
+                size: 40,  // Back to original size
+                speed: calculateEnemySpeed(),
+                angle: Math.atan2(player.y - y, player.x - x),
+                turnSpeed: ENEMY_TURN_SPEED,
+                currentFrame: 0,
+                frameCount: 0
+            });
+        }
+
+        function resetGame() {
+            // Clear all key states
+            for (let key in keys) {
+                keys[key] = false;
+            }
+            
+            gameOver = false;
+            gameStarting = false;  // No countdown needed
+            score = 0;
+            player.x = BASE_GAME_WIDTH / 2;
+            player.y = BASE_GAME_HEIGHT / 2;
+            player.size = STARTING_SIZE;
+            player.shots = STARTING_SHOTS;
+            player.speed = PLAYER_SPEED;
+            player.projectiles = [];
+            enemies = [];
+            drops = [];
+            lastFrameTime = 0;
+            currentFrameCount = 0;
+            currentAnimationFrame = 0;
+            requestAnimationFrame(update);
+        }
+
+        function checkCollision(obj1, obj2) {
+            const dx = obj1.x - obj2.x;
+            const dy = obj1.y - obj2.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            // If it's a collision with the player, use a smaller hitbox
+            if (obj1 === player || obj2 === player) {
+                const hitboxReduction = 0.75;  // Changed from 0.6 to 0.75 (75% of visual size)
+                return distance < ((obj1.size + obj2.size) / 2) * hitboxReduction;
+            }
+            
+            // For other collisions (projectiles, pickups), use normal size
+            return distance < (obj1.size + obj2.size) / 2;
+        }
+
+        function startGame() {
+            const input = document.getElementById('usernameInput');
+            if (input.value.trim() === '') {
+                alert('Please enter a username!');
+                return;
+            }
+            username = input.value.trim();
+            document.getElementById('usernameModal').style.display = 'none';
+            
+            gameStartTime = Date.now();
+            canShoot = false;
+            resetGame();
+        }
+
+        function update(currentTime) {
+            // Calculate time since last frame
+            const deltaTime = currentTime - lastFrameTime;
+            
+            // If not enough time has passed, skip this frame
+            if (deltaTime < FRAME_TIME) {
+                requestAnimationFrame(update);
+                return;
+            }
+            
+            // Update last frame time
+            lastFrameTime = currentTime - (deltaTime % FRAME_TIME);
+
+            if (gameOver) {
+                ctx.fillStyle = 'white';
+                ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+                ctx.shadowBlur = 4;
+                ctx.shadowOffsetX = 2;
+                ctx.shadowOffsetY = 2;
+                
+                ctx.font = 'bold 64px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('Game Over! Score: ' + score, BASE_GAME_WIDTH/2, BASE_GAME_HEIGHT/2 - 50);
+                
+                ctx.font = 'bold 32px Arial';
+                ctx.fillText('High Score: ' + sessionHighScore, BASE_GAME_WIDTH/2, BASE_GAME_HEIGHT/2);
+                ctx.fillText('Press SPACE to restart', BASE_GAME_WIDTH/2, BASE_GAME_HEIGHT/2 + 50);
+                
+                // Reset shadow
+                ctx.shadowColor = 'transparent';
+                ctx.shadowBlur = 0;
+                ctx.shadowOffsetX = 0;
+                ctx.shadowOffsetY = 0;
+                
+                ctx.textAlign = 'left';
+                return;
+            }
+
+            if (gameStarting) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);  // Clear previous numbers
+                requestAnimationFrame(update);
+                return;
+            }
+
+            if (player.shots <= 0 && drops.length === 0 && player.projectiles.length === 0) {
+                gameOver = true;
+                return;
+            }
+
+            // Simplified sprint handling
+            let currentSpeed = PLAYER_SPEED;
+            if (keys['Shift']) {
+                currentSpeed = SPRINT_SPEED;
+            }
+
+            // Apply movement with current speed
+            if (keys['w']) player.y -= currentSpeed;
+            if (keys['s']) player.y += currentSpeed;
+            if (keys['a']) player.x -= currentSpeed;
+            if (keys['d']) player.x += currentSpeed;
+
+            // Keep player in bounds
+            player.x = Math.max(player.size/2, Math.min(canvas.width - player.size/2, player.x));
+            player.y = Math.max(player.size/2, Math.min(canvas.height - player.size/2, player.y));
+
+            // Update projectiles
+            player.projectiles.forEach((proj, i) => {
+                proj.x += proj.dx;
+                proj.y += proj.dy;
+                
+                if (proj.x < 0 || proj.x > canvas.width || proj.y < 0 || proj.y > canvas.height) {
+                    player.projectiles.splice(i, 1);
+                }
+            });
+
+            // Update enemies
+            enemies.forEach((enemy, i) => {
+                const targetAngle = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+                let angleDiff = targetAngle - enemy.angle;
+                if (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+                if (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+                
+                if (Math.abs(angleDiff) > enemy.turnSpeed) {
+                    enemy.angle += Math.sign(angleDiff) * enemy.turnSpeed;
+                } else {
+                    enemy.angle = targetAngle;
+                }
+                
+                enemy.x += Math.cos(enemy.angle) * enemy.speed;
+                enemy.y += Math.sin(enemy.angle) * enemy.speed;
+
+                if (checkCollision(player, enemy)) {
+                    gameOver = true;
+                }
+
+                player.projectiles.forEach((proj, j) => {
+                    if (checkCollision(proj, enemy)) {
+                        drops.push({
+                            x: enemy.x,
+                            y: enemy.y,
+                            size: 40
+                        });
+                        
+                        enemies.splice(i, 1);
+                        player.projectiles.splice(j, 1);
+                        score++;
+                    }
+                });
+            });
+
+            // Check for drop collection
+            drops.forEach((drop, i) => {
+                if (checkCollision(player, drop)) {
+                    player.shots += 3;
+                    player.size += SIZE_INCREASE;  // Gain 9 size per pickup
+                    drops.splice(i, 1);
+                }
+            });
+
+            // Spawn enemies periodically
+            if (Math.random() < 0.02) spawnEnemy();
+
+            // Update session high score during gameplay if score exceeds it
+            if (score > sessionHighScore) {
+                sessionHighScore = score;
+            }
+
+            // Check if shooting cooldown is over
+            if (!canShoot && Date.now() - gameStartTime >= SHOOT_COOLDOWN) {
+                canShoot = true;
+            }
+
+            // Add cooldown indicator
+            if (!canShoot) {
+                ctx.fillStyle = 'white';
+                ctx.font = 'bold 32px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('Get Ready!', BASE_GAME_WIDTH/2, BASE_GAME_HEIGHT/2);
+                ctx.textAlign = 'left';
+            }
+
+            draw();
+            requestAnimationFrame(update);
+        }
+
+        // Add this function to determine which direction frames to use
+        function getPlayerDirection(mouseX, mouseY, playerX, playerY) {
+            const angle = Math.atan2(mouseY - playerY, mouseX - playerX);
+            const degrees = angle * (180 / Math.PI);
+            
+            // Convert angle to 0-360 range
+            const normalized = ((degrees + 360) % 360);
+            
+            // Determine direction based on 90-degree segments
+            if (normalized >= 315 || normalized < 45) return 'right';     // frames 4-7
+            if (normalized >= 45 && normalized < 135) return 'down';      // frames 8-11
+            if (normalized >= 135 && normalized < 225) return 'left';     // frames 12-15
+            return 'up';                                                  // frames 0-3
+        }
+
+        // Add this helper function to get enemy direction based on movement
+        function getEnemyDirection(angle) {
+            // Convert angle to degrees and normalize to 0-360
+            const degrees = (angle * (180 / Math.PI) + 360) % 360;
+            
+            // Determine direction based on 90-degree segments
+            if (degrees >= 315 || degrees < 45) return 'right';     // frames 4-7
+            if (degrees >= 45 && degrees < 135) return 'down';      // frames 8-11
+            if (degrees >= 135 && degrees < 225) return 'left';     // frames 12-15
+            return 'up';                                            // frames 0-3
+        }
+
+        // Modify the draw function
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw background map
+            if (mapSprite.complete && mapSprite.naturalWidth !== 0) {
+                ctx.drawImage(
+                    mapSprite,
+                    0,
+                    0,
+                    645,  // Original map width
+                    478,  // Original map height
+                    0,
+                    0,
+                    BASE_GAME_WIDTH,
+                    BASE_GAME_HEIGHT
+                );
+            }
+
+            // Update animation frame counter
+            currentFrameCount = (currentFrameCount + 1) % FRAME_DURATION;
+            if (currentFrameCount === 0) {
+                currentAnimationFrame = (currentAnimationFrame + 1) % FRAMES_PER_DIRECTION;
+            }
+
+            // Get player direction
+            const direction = getPlayerDirection(mousePosition.x, mousePosition.y, player.x, player.y);
+            
+            // Calculate which row of sprites to use
+            let spriteRow;
+            switch(direction) {
+                case 'up': spriteRow = 0; break;
+                case 'right': spriteRow = 1; break;
+                case 'down': spriteRow = 2; break;
+                case 'left': spriteRow = 3; break;
+            }
+
+            // Calculate source coordinates with centering offset
+            const sourceX = (currentAnimationFrame * CELL_SIZE) + SPRITE_OFFSET;
+            const sourceY = (spriteRow * CELL_SIZE) + SPRITE_OFFSET;
+            
+            ctx.save();
+            ctx.translate(player.x, player.y);
+            
+            // Draw the sprite centered on player position
+            ctx.drawImage(
+                playerSprite,
+                sourceX,
+                sourceY,
+                SPRITE_FRAME_WIDTH,
+                SPRITE_FRAME_HEIGHT,
+                -player.size/2,
+                -player.size/2,
+                player.size,
+                player.size
+            );
+            
+            ctx.restore();
+
+            // Draw projectiles using fireball sprite
+            player.projectiles.forEach(proj => {
+                ctx.drawImage(
+                    fireballSprite,
+                    0,
+                    0,
+                    552, // original width
+                    557, // original height
+                    proj.x - proj.size/2,
+                    proj.y - proj.size/2,
+                    proj.size,
+                    proj.size
+                );
+            });
+
+            // Draw aim indicator
+            const angle = Math.atan2(mousePosition.y - player.y, mousePosition.x - player.x);
+            const projectileSize = Math.max(8, (player.size / 40) * 8);
+            const spawnX = player.x + Math.cos(angle) * (player.size/2);
+            const spawnY = player.y + Math.sin(angle) * (player.size/2);
+            
+            // Draw aim indicator (fireball)
+            ctx.save();
+            ctx.globalAlpha = 0.5;
+            ctx.drawImage(
+                fireballSprite,
+                0,
+                0,
+                fireballSprite.width,
+                fireballSprite.height,
+                spawnX - projectileSize/2,
+                spawnY - projectileSize/2,
+                projectileSize,
+                projectileSize
+            );
+            ctx.globalAlpha = 1.0;
+            ctx.restore();
+
+            // Draw enemies with sprites
+            enemies.forEach(enemy => {
+                // Update enemy animation
+                enemy.frameCount = (enemy.frameCount + 1) % FRAME_DURATION;
+                if (enemy.frameCount === 0) {
+                    enemy.currentFrame = (enemy.currentFrame + 1) % FRAMES_PER_DIRECTION;
+                }
+
+                const direction = getEnemyDirection(enemy.angle);
+                let spriteRow;
+                switch(direction) {
+                    case 'up': spriteRow = 0; break;
+                    case 'right': spriteRow = 1; break;
+                    case 'down': spriteRow = 2; break;
+                    case 'left': spriteRow = 3; break;
+                }
+
+                const sourceX = (enemy.currentFrame * CELL_SIZE) + SPRITE_OFFSET;
+                const sourceY = (spriteRow * CELL_SIZE) + SPRITE_OFFSET;
+
+                ctx.save();
+                ctx.translate(enemy.x, enemy.y);
+                
+                // Draw enemy sprite
+                ctx.drawImage(
+                    enemySprite,
+                    sourceX,
+                    sourceY,
+                    SPRITE_FRAME_WIDTH,
+                    SPRITE_FRAME_HEIGHT,
+                    -enemy.size/2,
+                    -enemy.size/2,
+                    enemy.size,
+                    enemy.size
+                );
+                
+                ctx.restore();
+            });
+
+            // Draw drops (wood pickups)
+            drops.forEach(drop => {
+                ctx.drawImage(
+                    woodSprite,
+                    0,
+                    0,
+                    woodSprite.width,  // Use full width of wood sprite
+                    woodSprite.height, // Use full height of wood sprite
+                    drop.x - drop.size/2,
+                    drop.y - drop.size/2,
+                    drop.size,
+                    drop.size
+                );
+            });
+
+            // Draw scores and shots with larger white text
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 32px Arial';  // Increased from 20px and added bold
+            
+            // Add shadow for better visibility
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+            ctx.shadowBlur = 4;
+            ctx.shadowOffsetX = 2;
+            ctx.shadowOffsetY = 2;
+
+            // Score on left
+            ctx.textAlign = 'left';
+            ctx.fillText('Score: ' + score, 20, 50);  // Adjusted position
+            
+            // Shots below score
+            ctx.fillText('Shots: ' + player.shots, 20, 90);  // Adjusted position
+            
+            // High Score on right
+            ctx.textAlign = 'right';
+            ctx.fillText('High Score: ' + sessionHighScore, BASE_GAME_WIDTH - 20, 50);  // Adjusted position
+
+            // Reset shadow
+            ctx.shadowColor = 'transparent';
+            ctx.shadowBlur = 0;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
+
+            // Reset text align
+            ctx.textAlign = 'left';
+        }
+
+        // Update the resize function
+        function resizeGame() {
+            const container = document.querySelector('.game-container');
+            const containerWidth = container.clientWidth;
+            const containerHeight = container.clientHeight;
+            
+            // Set canvas resolution
+            canvas.width = BASE_GAME_WIDTH;
+            canvas.height = BASE_GAME_HEIGHT;
+            
+            // Calculate scaling to fit screen while maintaining aspect ratio
+            const scaleX = containerWidth / BASE_GAME_WIDTH;
+            const scaleY = containerHeight / BASE_GAME_HEIGHT;
+            const scale = Math.min(scaleX, scaleY);
+            
+            // Set display size
+            canvas.style.width = `${BASE_GAME_WIDTH * scale}px`;
+            canvas.style.height = `${BASE_GAME_HEIGHT * scale}px`;
+        }
+
+        // Make sure to call resize when window changes
+        window.addEventListener('resize', resizeGame);
+
+        // Update your initialization code
+        function init() {
+            // Move canvas into container
+            const container = document.createElement('div');
+            container.className = 'game-container';
+            canvas.parentNode.insertBefore(container, canvas);
+            container.appendChild(canvas);
+            
+            // Initial resize
+            resizeGame();
+            
+            // Draw blank canvas with prompt
+            ctx.fillStyle = 'black';
+            ctx.font = '24px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('Enter username to start', canvas.width/2, canvas.height/2);
+        }
+
+        // Update sprite loading system
+        const sprites = [playerSprite, enemySprite, fireballSprite, woodSprite, mapSprite];
+        let spritesLoaded = 0;
+
+        function initGame() {
+            console.log('Initializing game with', spritesLoaded, 'sprites loaded');
+            init();
+        }
+
+        sprites.forEach(sprite => {
+            sprite.onload = () => {
+                spritesLoaded++;
+                console.log(`Loaded sprite (${spritesLoaded}/${sprites.length})`);
+                if (spritesLoaded === sprites.length) {
+                    initGame();
+                }
+            };
+            sprite.onerror = (e) => {
+                console.error('Failed to load sprite:', sprite.src);
+                console.error(e);
+            };
+        });
+    </script>
+</body>
+</html> 
