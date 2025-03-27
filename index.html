@@ -174,7 +174,7 @@
                 // Handle space key for restart
                 if (e.code === 'Space' && gameOver) {
                     resetGame();
-                    e.preventDefault();
+                    e.preventDefault(); // Prevent page scrolling
                 }
             } else {
                 keys['Shift'] = true;
@@ -386,9 +386,19 @@
         }
 
         function update(currentTime) {
-            // Check for game over conditions first
+            // Calculate time since last frame
+            const deltaTime = currentTime - lastFrameTime;
+            
+            // If not enough time has passed, skip this frame
+            if (deltaTime < FRAME_TIME) {
+                requestAnimationFrame(update);
+                return;
+            }
+            
+            // Update last frame time
+            lastFrameTime = currentTime - (deltaTime % FRAME_TIME);
+
             if (gameOver) {
-                // Draw game over screen
                 ctx.fillStyle = 'white';
                 ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
                 ctx.shadowBlur = 4;
@@ -413,32 +423,16 @@
                 return;
             }
 
-            // Check for out of ammo condition
-            if (player.shots <= 0 && drops.length === 0 && player.projectiles.length === 0) {
-                gameOver = true;
-                if (score > sessionHighScore) {
-                    sessionHighScore = score;
-                }
-                return;
-            }
-
             if (gameStarting) {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);  // Clear previous numbers
                 requestAnimationFrame(update);
                 return;
             }
 
-            // Calculate time since last frame
-            const deltaTime = currentTime - lastFrameTime;
-            
-            // If not enough time has passed, skip this frame
-            if (deltaTime < FRAME_TIME) {
-                requestAnimationFrame(update);
+            if (player.shots <= 0 && drops.length === 0 && player.projectiles.length === 0) {
+                gameOver = true;
                 return;
             }
-            
-            // Update last frame time
-            lastFrameTime = currentTime - (deltaTime % FRAME_TIME);
 
             // Simplified sprint handling
             let currentSpeed = PLAYER_SPEED;
@@ -584,8 +578,8 @@
                     mapSprite,
                     0,
                     0,
-                    645,
-                    478,
+                    645,  // Original map width
+                    478,  // Original map height
                     0,
                     0,
                     BASE_GAME_WIDTH,
