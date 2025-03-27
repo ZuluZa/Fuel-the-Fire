@@ -151,9 +151,6 @@
         let lastShotTime = 0;
         let isMouseDown = false;
 
-        // Add this variable at the top
-        let gameOverReason = ''; // 'collision' or 'ammo'
-
         // Player
         const player = {
             x: BASE_GAME_WIDTH / 2,
@@ -357,7 +354,6 @@
             requestAnimationFrame(update);
             isMouseDown = false;
             lastShotTime = 0;
-            gameOverReason = '';
         }
 
         function checkCollision(obj1, obj2) {
@@ -420,7 +416,6 @@
             // Check for out of ammo condition
             if (player.shots <= 0 && drops.length === 0 && player.projectiles.length === 0) {
                 gameOver = true;
-                gameOverReason = 'ammo';
                 if (score > sessionHighScore) {
                     sessionHighScore = score;
                 }
@@ -489,7 +484,6 @@
 
                 if (checkCollision(player, enemy)) {
                     gameOver = true;
-                    gameOverReason = 'collision';
                 }
 
                 player.projectiles.forEach((proj, j) => {
@@ -758,47 +752,6 @@
 
             // Reset text align
             ctx.textAlign = 'left';
-
-            // Draw game over screen based on reason
-            if (gameOver) {
-                // Add dark overlay
-                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-                ctx.fillRect(0, 0, BASE_GAME_WIDTH, BASE_GAME_HEIGHT);
-
-                // Set up text style
-                ctx.fillStyle = 'white';
-                ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
-                ctx.shadowBlur = 4;
-                ctx.shadowOffsetX = 2;
-                ctx.shadowOffsetY = 2;
-                ctx.textAlign = 'center';
-
-                if (gameOverReason === 'ammo') {
-                    // Out of ammo text
-                    ctx.font = 'bold 64px Arial';
-                    ctx.fillText('Out of Ammo!', BASE_GAME_WIDTH/2, BASE_GAME_HEIGHT/2 - 100);
-                    ctx.fillText('Score: ' + score, BASE_GAME_WIDTH/2, BASE_GAME_HEIGHT/2 - 20);
-                    
-                    ctx.font = 'bold 32px Arial';
-                    ctx.fillText('High Score: ' + sessionHighScore, BASE_GAME_WIDTH/2, BASE_GAME_HEIGHT/2 + 40);
-                    ctx.fillText('Press SPACE to restart', BASE_GAME_WIDTH/2, BASE_GAME_HEIGHT/2 + 100);
-                } else {
-                    // Collision text
-                    ctx.font = 'bold 64px Arial';
-                    ctx.fillText('Game Over!', BASE_GAME_WIDTH/2, BASE_GAME_HEIGHT/2 - 100);
-                    ctx.fillText('Score: ' + score, BASE_GAME_WIDTH/2, BASE_GAME_HEIGHT/2 - 20);
-                    
-                    ctx.font = 'bold 32px Arial';
-                    ctx.fillText('High Score: ' + sessionHighScore, BASE_GAME_WIDTH/2, BASE_GAME_HEIGHT/2 + 40);
-                    ctx.fillText('Press SPACE to restart', BASE_GAME_WIDTH/2, BASE_GAME_HEIGHT/2 + 100);
-                }
-
-                // Reset shadow
-                ctx.shadowColor = 'transparent';
-                ctx.shadowBlur = 0;
-                ctx.shadowOffsetX = 0;
-                ctx.shadowOffsetY = 0;
-            }
         }
 
         // Update the resize function
